@@ -1,10 +1,14 @@
+import logging
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from database import get_db
-from models.models import Chat, ChatMessage
-from models.schema import (
+from config import get_settings
+from models import Chat, ChatMessage
+from schemas import (
     ChatCreate,
     ChatResponse,
     ChatListResponse,
@@ -13,7 +17,9 @@ from models.schema import (
     MessageListResponse,
     RAGResponse,
 )
-from services.rag_service import chat_with_rag
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
 
 router = APIRouter(prefix="/chats", tags=["Chats"])
 
@@ -53,9 +59,30 @@ def send_message(chat_id: int, data: MessageCreate, db: Session = Depends(get_db
     if not chat:
         raise HTTPException(status_code=404, detail="Ko tìm thấy chat")
 
-    assistant_message, sources = chat_with_rag(data.content, chat_id, db)
+    try:
+        response = httpx.post(
+            f"{settings.rag_service_url}/rag/query",
+            json={"query": data.content, "chat_id": chat_id},
+            timeout=120.0,
+        )
+        response.raise_for_status()
+        rag_data = response.json()
+    except httpx.HTTPStatusError as e:
+        logger.error(f"RAG lỗi : {e.response.text}")
+        raise HTTPException(status_code=502, detail="RAG lỗi")
+    except httpx.RequestError as e:
+        logger.error(f"RAG không thể kết nối: {e}")
+        raise HTTPException(status_code=503, detail="RAG không thể kết nối")
 
-    db.commit()
+    db.refresh(chat)
+
+    stmt = (
+        select(ChatMessage)
+        .where(ChatMessage.chat_id == chat_id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(1)
+    )
+    assistant_message = db.execute(stmt).scalar()
 
     return RAGResponse(
         answer=MessageResponse(
@@ -65,7 +92,7 @@ def send_message(chat_id: int, data: MessageCreate, db: Session = Depends(get_db
             content=assistant_message.content,
             created_at=assistant_message.created_at,
         ),
-        sources=sources,
+        sources=rag_data.get("sources", []),
     )
 
 

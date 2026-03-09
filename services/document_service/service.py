@@ -12,8 +12,8 @@ from docling.document_converter import DocumentConverter
 from docling.chunking import HybridChunker
 from openai import OpenAI
 
-from core.config import get_settings
-from models.models import Document, DocumentChunk
+from config import get_settings
+from models import Document, DocumentChunk
 
 logger = logging.getLogger(__name__)
 
@@ -103,11 +103,9 @@ def process_image(file_path: str) -> list[dict]:
     return []
 
 
-def process_and_store_documents(files: list[tuple[str, str, str | None]], chat_id: int, db: Session) -> tuple[list[Document], int]:
+def save_uploaded_files(files: list[tuple[str, str, str | None]], chat_id: int, db: Session) -> list[Document]:
     upload_dir = ensure_upload_dir()
     documents = []
-    all_chunks_data = []
-    doc_chunk_map = []
 
     for filename, file_content_path, content_type in files:
         file_ext = os.path.splitext(filename)[1].lower()
@@ -121,54 +119,11 @@ def process_and_store_documents(files: list[tuple[str, str, str | None]], chat_i
             filename=filename,
             content_type=content_type,
             chat_id=chat_id,
+            processing_status="pending",
+            stored_path=str(stored_path),
         )
         db.add(doc)
         db.flush()
         documents.append(doc)
 
-        chunks_data = []
-
-        if file_ext in [".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"]:
-            vietocr_chunks = process_image(str(stored_path))
-            if vietocr_chunks:
-                chunks_data.extend(vietocr_chunks)
-
-        try:
-            docling_chunks = process_document(str(stored_path))
-            if docling_chunks:
-                if chunks_data:
-                    offset = len(chunks_data)
-                    for c in docling_chunks:
-                        c["index"] += offset
-                chunks_data.extend(docling_chunks)
-        except Exception as e:
-            logger.warning(f"Docling failed for {filename}: {e}")
-            if not chunks_data:
-                chunks_data.append(
-                    {
-                        "text": f"[Document: {filename} - could not extract text]",
-                        "metadata": {"error": str(e)},
-                        "index": 0,
-                    }
-                )
-
-        for chunk in chunks_data:
-            doc_chunk_map.append((doc.id, chunk))
-        all_chunks_data.extend(chunks_data)
-
-    if all_chunks_data:
-        texts = [c["text"] for c in all_chunks_data]
-        embeddings = get_embeddings_batch(texts)
-
-        for (doc_id, chunk), embedding in zip(doc_chunk_map, embeddings):
-            db_chunk = DocumentChunk(
-                document_id=doc_id,
-                text=chunk["text"],
-                embedding=embedding,
-                chunk_metadata=chunk.get("metadata", {}),
-                chunk_index=chunk["index"],
-            )
-            db.add(db_chunk)
-
-    db.flush()
-    return documents, len(all_chunks_data)
+    return documents

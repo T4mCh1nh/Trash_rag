@@ -13,12 +13,9 @@ class Settings(BaseSettings):
     embedding_model: str
     embedding_dim: int
 
-    gemini_api_key: str
-    gemini_model: str
+    upload_dir: str = "uploads"
 
-    upload_dir: str
-
-    retrieval_top_k: int = 5
+    redis_url: str
 
     class Config:
         env_file = ".env"

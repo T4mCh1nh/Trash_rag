@@ -1,7 +1,7 @@
 fastapi
 uvicorn[standard]
-sqlalchemy[asyncio]
-asyncpg
+sqlalchemy
+psycopg2-binary
 pgvector
 pydantic-settings
 python-dotenv
@@ -10,6 +10,6 @@ Pillow
 docling
 vietocr
 openai
-google-generativeai
 torch
 transformers
+celery[redis]
