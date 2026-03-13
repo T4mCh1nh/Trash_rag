@@ -10,6 +10,7 @@ from config import get_settings
 from models import Chat, ChatMessage
 from schemas import (
     ChatCreate,
+    ChatUpdate,
     ChatResponse,
     ChatListResponse,
     MessageCreate,
@@ -59,6 +60,11 @@ def send_message(chat_id: int, data: MessageCreate, db: Session = Depends(get_db
     if not chat:
         raise HTTPException(status_code=404, detail="Ko tìm thấy chat")
 
+    # Save user message to DB first to avoid data loss if RAG fails
+    user_msg = ChatMessage(chat_id=chat_id, role="user", content=data.content)
+    db.add(user_msg)
+    db.commit()
+
     try:
         response = httpx.post(
             f"{settings.rag_service_url}/rag/query",
@@ -74,15 +80,18 @@ def send_message(chat_id: int, data: MessageCreate, db: Session = Depends(get_db
         logger.error(f"RAG không thể kết nối: {e}")
         raise HTTPException(status_code=503, detail="RAG cant kết nối")
 
-    db.refresh(chat)
-
+    # Get the latest assistant message created by rag_service
     stmt = (
         select(ChatMessage)
         .where(ChatMessage.chat_id == chat_id)
+        .where(ChatMessage.role == "assistant")
         .order_by(ChatMessage.created_at.desc())
         .limit(1)
     )
     assistant_message = db.execute(stmt).scalar()
+
+    if not assistant_message:
+        raise HTTPException(status_code=502, detail="RAG không trả về kết quả")
 
     return RAGResponse(
         answer=MessageResponse(
@@ -122,6 +131,20 @@ def get_messages(chat_id: int, db: Session = Depends(get_db)):
             for m in messages
         ]
     )
+
+
+@router.put("/{chat_id}", response_model=ChatResponse)
+def update_chat(chat_id: int, data: ChatUpdate, db: Session = Depends(get_db)):
+    chat = db.get(Chat, chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Ko tìm thấy chat")
+
+    if data.title is not None:
+        chat.title = data.title
+
+    db.commit()
+    db.refresh(chat)
+    return ChatResponse(id=chat.id, title=chat.title, created_at=chat.created_at)
 
 
 @router.delete("/{chat_id}")

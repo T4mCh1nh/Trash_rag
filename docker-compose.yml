@@ -10,6 +10,8 @@ services:
       - "${DATABASE_PORT}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - rag_network
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USERNAME} -d ${DATABASE_NAME}"]
@@ -22,6 +24,8 @@ services:
     container_name: rag_redis
     ports:
       - "6379:6379"
+    networks:
+      - rag_network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -39,7 +43,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - rag_network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   document-service:
     build: ./services/document_service
@@ -56,7 +68,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - rag_network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   rag-service:
     build: ./services/rag_service
@@ -68,7 +88,19 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      document-service:
+        condition: service_healthy
+    networks:
+      - rag_network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   worker:
     build: ./services/document_service
@@ -85,9 +117,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - rag_network
     restart: unless-stopped
 
 volumes:
   postgres_data:
   upload_data:
   storage:
+
+networks:
+  rag_network:
+    driver: bridge

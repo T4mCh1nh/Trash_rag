@@ -130,6 +130,43 @@ def delete_document(document_id: int, db: Session = Depends(get_db)):
     return {"message": "Xóa doc thành công", "id": document_id}
 
 
+@router.post("/documents/{doc_id}/retry", response_model=DocumentStatusResponse)
+def retry_document(doc_id: int, db: Session = Depends(get_db)):
+    doc = db.get(Document, doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Ko tìm thấy doc")
+
+    if doc.processing_status not in ("failed", "pending"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Chỉ có thể retry doc ở trạng thái 'failed' hoặc 'pending', hiện tại: '{doc.processing_status}'"
+        )
+
+    # Delete old chunks if any
+    old_chunks = db.execute(select(DocumentChunk).where(DocumentChunk.document_id == doc_id)).scalars().all()
+    for chunk in old_chunks:
+        db.delete(chunk)
+
+    doc.processing_status = "pending"
+    doc.processing_error = None
+    db.commit()
+
+    process_document_task.delay(doc.id)
+
+    chunks_count = db.execute(
+        select(func.count()).where(DocumentChunk.document_id == doc_id)
+    ).scalar()
+
+    return DocumentStatusResponse(
+        id=doc.id,
+        filename=doc.filename,
+        processing_status=doc.processing_status,
+        processing_error=doc.processing_error,
+        chunks_created=chunks_count or 0,
+        created_at=doc.created_at,
+    )
+
+
 @router.post("/internal/search", response_model=SearchResponse)
 def search_chunks(data: SearchRequest, db: Session = Depends(get_db)):
     query_embedding = get_embedding(data.query)
